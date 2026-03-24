@@ -52,10 +52,12 @@ class AReaLTokenCounter(BaseTokenCounter):
                     num_tokens += len(self.tokenizer.encode(str(value)))
                 else:
                     for item in value:
-                        if item["type"] == "text":
+                        if isinstance(item, dict) and item.get("type") == "text":
                             num_tokens += len(self.tokenizer.encode(str(item["text"])))
+                        elif isinstance(item, dict):
+                            num_tokens += len(self.tokenizer.encode(str(item)))
                         else:
-                            raise ValueError(f"Unsupported item type: {item['type']}")
+                            num_tokens += len(self.tokenizer.encode(str(item)))
         num_tokens += 3  # every reply is primed with <|start|>assistant<|message|>
         return num_tokens
 
@@ -195,12 +197,15 @@ class AReaLOpenAICompatibleModel(BaseModelBackend):
         r"""Initialize the token counter for the model backend.
 
         Returns:
-            OpenAITokenCounter: The token counter following the model's
-                tokenization style.
+            BaseTokenCounter: The token counter following the model's
+                tokenization style. Uses AReaLTokenCounter with the
+                actual model tokenizer for accurate token counting.
         """
 
         if not self._token_counter:
-            self._token_counter = OpenAITokenCounter(ModelType.GPT_4O_MINI)
+            self._token_counter = AReaLTokenCounter(
+                self.tokenizer, tokens_per_message=4
+            )
         return self._token_counter
 
     @property
