@@ -40,6 +40,8 @@ from areal.api.cli_args import GenerationHyperparameters
 from areal.api.io_struct import ModelRequest
 from areal.experimental.openai.cache import CompletionCache
 from areal.experimental.openai.tool_call_parser import process_tool_calls
+import threading
+_think_content_storage = type('obj', (object,), {'last_content': None})()
 from areal.experimental.openai.types import InteractionWithTokenLogpReward
 from areal.utils import logging
 
@@ -189,6 +191,11 @@ class AsyncCompletionsWithReward(BaseAsyncCompletions):
 
         output_text = self.tokenizer.decode(response.output_tokens)
 
+        # Preserve <think> content before tool call parsing strips it
+        import re as _re
+        _think_match = _re.search(r'(<think>.*?</think>)', output_text, _re.DOTALL)
+        _think_block = _think_match.group(1) if _think_match else None
+
         # Parse tool calls.
         tool_calls = None
         if tool_choice != "none" and tools:
@@ -199,14 +206,19 @@ class AsyncCompletionsWithReward(BaseAsyncCompletions):
                 response.stop_reason,
             )
 
+            # Restore <think> block if it was stripped by tool call parsing
+            if _think_block and "<think>" not in output_text:
+                output_text = _think_block + "\n" + output_text
+
         # Create proper ChatCompletion object with all required fields
+        _full_output_text = output_text
         chat_completion = ChatCompletion(
             id=completion_id,
             choices=[
                 Choice(
                     finish_reason=response.stop_reason,
                     index=0,
-                    logprobs=None,  # For simplicity
+                    logprobs=None,
                     message=ChatCompletionMessage(
                         content=output_text,
                         role="assistant",
@@ -225,6 +237,11 @@ class AsyncCompletionsWithReward(BaseAsyncCompletions):
                 total_tokens=len(response.input_tokens) + len(response.output_tokens),
             ),
         )
+
+        # Store full content with <think> in thread-local for CAMEL to read
+        _think_content_storage.last_content = _full_output_text
+        if '<think>' in _full_output_text:
+            chat_completion.choices[0].message.content = _full_output_text
 
         if is_omitted(store) or store:
             # Cache the completion with its input messages
@@ -430,6 +447,11 @@ class AsyncResponsesWithReward(BaseAsyncResponses):
         engine_resp = await self.engine.agenerate(model_request)
         output_text = self.tokenizer.decode(engine_resp.output_tokens)
 
+        # Preserve <think> content before tool call parsing strips it
+        import re as _re
+        _think_match = _re.search(r'(<think>.*?</think>)', output_text, _re.DOTALL)
+        _think_block = _think_match.group(1) if _think_match else None
+
         # Parse tool calls.
         tool_calls = None
         if not is_omitted(tool_choice) and tool_choice != "none" and tools:
@@ -440,6 +462,10 @@ class AsyncResponsesWithReward(BaseAsyncResponses):
                 engine_resp.stop_reason,
                 use_responses=True,
             )
+
+            # Restore <think> block if it was stripped by tool call parsing
+            if _think_block and "<think>" not in output_text:
+                output_text = _think_block + "\n" + output_text
 
         # Extract reasoning tokens from output
         reasoning_token_count = self._count_reasoning_tokens(output_text)

@@ -118,6 +118,7 @@ class AReaLOpenAICompatibleModel(BaseModelBackend):
             token_counter,
             timeout,
             max_retries,
+            extract_thinking_from_response=True,
         )
         self.tokenizer = tokenizer
         self._client = openai_client
